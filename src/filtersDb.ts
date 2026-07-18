@@ -48,14 +48,15 @@ const FALLBACK: FilterDef[] = [
   },
 ];
 
-export type Category = "boy" | "girl" | "woman" | "man";
-export const CATEGORIES: Category[] = ["boy", "girl", "woman", "man"];
+export type Category = "boy" | "girl" | "woman" | "man" | "animal";
+export const CATEGORIES: Category[] = ["boy", "girl", "woman", "man", "animal"];
 
 export const CATEGORY_META: Record<Category, { emoji: string; label: string }> = {
   boy: { emoji: "👦", label: "Boy" },
   girl: { emoji: "👧", label: "Girl" },
   woman: { emoji: "👩", label: "Woman" },
   man: { emoji: "👨", label: "Man" },
+  animal: { emoji: "🐾", label: "Animal" },
 };
 
 async function tryFetch(url: string): Promise<FilterDef[] | null> {

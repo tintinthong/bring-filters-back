@@ -4,12 +4,14 @@ A mobile-web **face AR filter** you record in the browser and share to Instagram
 Since Meta shut down Spark AR, this is the open path: on-device face tracking in
 any modern mobile browser, record a clip, share it via the native share sheet.
 
-**The twist:** the app looks at who's in frame (**boy / girl / woman / man**) and
-serves each a **filter of the day** — deterministic per date, reshuffled every day.
-Filters live in an online JSON database you can edit without redeploying.
+**The twist:** the app looks at who's in frame (**boy / girl / woman / man**, or an
+**animal** 🐾) and serves each a **filter of the day** — deterministic per date,
+reshuffled every day. Filters live in an online JSON database you can edit without
+redeploying.
 
 - **Face tracking:** [MediaPipe FaceLandmarker](https://ai.google.dev/edge/mediapipe) (478 points, on-device via WebGL)
 - **Who's in frame:** [@vladmandic/face-api](https://github.com/vladmandic/face-api) age + gender, throttled + smoothed (lazy-loaded chunk)
+- **Animals:** MediaPipe ObjectDetector (EfficientDet-Lite / COCO — cat, dog, bird, horse…); the filter anchors to the pet's bounding box
 - **Filters as data:** emoji + vector parts anchored to landmarks — see [`public/filters.json`](public/filters.json)
 - **Recording:** `MediaRecorder` on the canvas stream + mic audio
 - **Sharing:** Web Share API (files) → Instagram / Reels / Stories; download fallback on desktop
@@ -17,7 +19,9 @@ Filters live in an online JSON database you can edit without redeploying.
 
 ## How the daily filter is chosen
 
-1. Age + gender are estimated on-device and smoothed into one of `boy / girl / woman / man`.
+1. If a human face is found: age + gender are estimated on-device and smoothed into
+   `boy / girl / woman / man`. If no face but a cat/dog/etc. is detected, the category
+   is `animal` and the filter anchors to the pet's bounding box (a face wins over a pet).
 2. Today's date (`YYYY-MM-DD`, local) seeds a PRNG → the filter list is shuffled →
    one filter is assigned per category. Same day = same filters; next day = reshuffled.
    Distinct per category when the DB has ≥ 4 filters. (See `dailyAssignment` in `src/filtersDb.ts`.)

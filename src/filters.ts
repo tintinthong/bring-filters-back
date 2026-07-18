@@ -283,6 +283,43 @@ function drawWhiskers(ctx: CanvasRenderingContext2D, f: FaceFrame, part: Part) {
   }
 }
 
+/**
+ * A synthetic face frame built from a bounding box (e.g. an animal detection).
+ * We can't get landmarks on a pet, so we assume the face fills the box and place
+ * the key points relative to it — this lets EVERY filter render on an animal.
+ */
+export interface Box {
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+}
+
+export function frameFromBox(b: Box): FaceFrame {
+  const cx = b.originX + b.width / 2;
+  const span = b.width * 0.28;
+  const eyeY = b.originY + b.height * 0.4;
+  const center: Pt = { x: cx, y: b.originY + b.height / 2 };
+  const pts: Record<number, Pt> = {
+    [L_EYE_OUTER]: { x: cx - span, y: eyeY },
+    [R_EYE_OUTER]: { x: cx + span, y: eyeY },
+    [NOSE_TIP]: { x: cx, y: b.originY + b.height * 0.56 },
+    [FOREHEAD]: { x: cx, y: b.originY + b.height * 0.14 },
+    [CHIN]: { x: cx, y: b.originY + b.height * 0.96 },
+    [L_CHEEK]: { x: b.originX + b.width * 0.14, y: eyeY },
+    [R_CHEEK]: { x: b.originX + b.width * 0.86, y: eyeY },
+    [UPPER_LIP]: { x: cx, y: b.originY + b.height * 0.7 },
+    [LOWER_LIP]: { x: cx, y: b.originY + b.height * 0.71 },
+  };
+  return {
+    p: (i) => pts[i] ?? center,
+    ux: { x: 1, y: 0 },
+    uy: { x: 0, y: -1 },
+    s: span * 2,
+    mouthOpen: 0,
+  };
+}
+
 /** Render one filter definition onto the 2D context. */
 export function renderFilter(ctx: CanvasRenderingContext2D, f: FaceFrame, def: FilterDef) {
   for (const part of def.parts) {

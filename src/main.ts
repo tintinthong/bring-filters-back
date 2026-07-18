@@ -1,6 +1,6 @@
 import "./style.css";
-import { FilesetResolver, FaceLandmarker } from "@mediapipe/tasks-vision";
-import { buildFrame, renderFilter, type FilterDef } from "./filters";
+import { FilesetResolver, FaceLandmarker, ObjectDetector, type Detection } from "@mediapipe/tasks-vision";
+import { buildFrame, frameFromBox, renderFilter, type FaceFrame, type FilterDef, type Box } from "./filters";
 import {
   loadFilters,
   dailyAssignment,
@@ -13,8 +13,24 @@ import { CategorySmoother } from "./smoother";
 import type { classifyOnce as ClassifyOnce } from "./classify";
 
 const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm";
-const MODEL_URL =
+const FACE_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const OBJECT_MODEL_URL =
+  "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.task";
+
+// COCO classes we treat as "animal".
+const ANIMAL_SET = new Set([
+  "bird",
+  "cat",
+  "dog",
+  "horse",
+  "sheep",
+  "cow",
+  "elephant",
+  "bear",
+  "zebra",
+  "giraffe",
+]);
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -33,28 +49,41 @@ const status = $<HTMLParagraphElement>("#status");
 
 // ---- state ----
 let landmarker: FaceLandmarker | null = null;
+let objectDetector: ObjectDetector | null = null;
 let stream: MediaStream | null = null;
 let running = false;
 let lastVideoTime = -1;
+let lastObjTime = 0;
 
+let allFilters: FilterDef[] = [];
 let dayKey = todayKey();
 let assignment: Record<Category, FilterDef> | null = null;
+
 const smoother = new CategorySmoother();
-let manualCategory: Category | null = null; // tap to override auto-detection
+let autoCategory: Category | null = null; // what we currently detect (human or animal)
+let manualCategory: Category | null = null; // tap to override detection
 let classify: typeof ClassifyOnce | null = null; // set after lazy-loading the classifier
+
+// animal detection (throttled, so we keep + smooth the last box)
+let animalBox: Box | null = null;
+let animalSeenAt = 0;
 
 function setStatus(msg: string) {
   status.textContent = msg;
 }
 
-/** The category we're currently rendering for (manual override wins). */
 function activeCategory(): Category | null {
-  return manualCategory ?? smoother.category;
+  return manualCategory ?? autoCategory;
 }
 
 function activeFilter(): FilterDef | null {
   const cat = activeCategory();
   return cat && assignment ? assignment[cat] : null;
+}
+
+function onCategoryChange() {
+  refreshPanel();
+  refreshDetectedBadge();
 }
 
 // ---- category panel ----
@@ -67,9 +96,8 @@ function buildCategoryPanel() {
     btn.dataset.cat = cat;
     btn.innerHTML = `<span class="who">${meta.emoji}</span><span class="flt">…</span>`;
     btn.onclick = () => {
-      // toggle manual override for this category
       manualCategory = manualCategory === cat ? null : cat;
-      refreshPanel();
+      onCategoryChange();
     };
     categoriesEl.appendChild(btn);
   }
@@ -80,19 +108,19 @@ function refreshPanel() {
   const active = activeCategory();
   for (const btn of Array.from(categoriesEl.children) as HTMLButtonElement[]) {
     const cat = btn.dataset.cat as Category;
-    const flt = btn.querySelector(".flt")!;
-    flt.textContent = assignment[cat]?.name ?? "…";
+    btn.querySelector(".flt")!.textContent = assignment[cat]?.name ?? "…";
     btn.setAttribute("aria-current", String(cat === active));
   }
 }
 
 function refreshDetectedBadge() {
-  const auto = smoother.category;
   if (manualCategory) {
     const m = CATEGORY_META[manualCategory];
     detectedBadge.textContent = `${m.emoji} ${m.label} · manual`;
-  } else if (auto) {
-    const m = CATEGORY_META[auto];
+  } else if (autoCategory === "animal") {
+    detectedBadge.textContent = "🐾 Animal";
+  } else if (autoCategory) {
+    const m = CATEGORY_META[autoCategory];
     detectedBadge.textContent = `${m.emoji} ${m.label} · ~${smoother.age}y`;
   } else {
     detectedBadge.textContent = "detecting…";
@@ -105,18 +133,18 @@ async function start() {
   setStatus("Loading filters + models…");
 
   try {
-    // filters DB (online) + models, in parallel
     const [{ filters, source }, fileset] = await Promise.all([
       loadFilters(),
       FilesetResolver.forVisionTasks(WASM_BASE),
     ]);
 
-    assignment = dailyAssignment(filters, dayKey);
+    allFilters = filters;
+    assignment = dailyAssignment(allFilters, dayKey);
     todayEl.textContent = `Today · ${dayKey} · ${filters.length} filters (${source})`;
     refreshPanel();
 
     landmarker = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
+      baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate: "GPU" },
       runningMode: "VIDEO",
       numFaces: 1,
     });
@@ -136,24 +164,36 @@ async function start() {
     startBtn.hidden = true;
     recordBtn.hidden = false;
     running = true;
-    setStatus("Look at the camera — your filter is picked for you.");
+    setStatus("Look at the camera — a pet works too 🐾");
     requestAnimationFrame(renderLoop);
 
-    // classifier is optional + heavy; lazy-load it in the background
+    // Human age/gender classifier — heavy, so lazy-load in the background.
     import("./classify")
       .then(async (mod) => {
         await mod.initClassifier();
         classify = mod.classifyOnce;
-        refreshDetectedBadge();
         classifyLoop();
       })
       .catch((e) => {
         console.warn("classifier unavailable:", e);
-        detectedBadge.textContent = "auto-detect off · tap a category";
-        // fall back to a default so a filter still shows
-        if (!manualCategory) manualCategory = "man";
-        refreshPanel();
+        if (!manualCategory && !autoCategory) {
+          manualCategory = "man";
+          onCategoryChange();
+        }
       });
+
+    // Animal detector — also loads in the background.
+    ObjectDetector.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: OBJECT_MODEL_URL, delegate: "GPU" },
+      runningMode: "VIDEO",
+      scoreThreshold: 0.4,
+      maxResults: 5,
+    })
+      .then((od) => {
+        objectDetector = od;
+      })
+      .catch((e) => console.warn("object detector unavailable:", e));
+
     refreshDetectedBadge();
   } catch (err) {
     console.error(err);
@@ -162,41 +202,89 @@ async function start() {
   }
 }
 
+function pickAnimalBox(detections: readonly Detection[]): Box | null {
+  let best: Box | null = null;
+  let bestScore = 0;
+  for (const d of detections) {
+    const c = d.categories?.[0];
+    if (!c || !d.boundingBox) continue;
+    if (ANIMAL_SET.has(c.categoryName) && c.score >= 0.4 && c.score > bestScore) {
+      bestScore = c.score;
+      best = d.boundingBox;
+    }
+  }
+  return best;
+}
+
+function lerpBox(a: Box, b: Box, t: number): Box {
+  return {
+    originX: a.originX + (b.originX - a.originX) * t,
+    originY: a.originY + (b.originY - a.originY) * t,
+    width: a.width + (b.width - a.width) * t,
+    height: a.height + (b.height - a.height) * t,
+  };
+}
+
 function renderLoop() {
   if (!running || !landmarker) return;
+  const now = performance.now();
 
   if (video.currentTime !== lastVideoTime && video.readyState >= 2) {
     lastVideoTime = video.currentTime;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    const res = landmarker.detectForVideo(video, performance.now());
-    const filter = activeFilter();
-    if (res.faceLandmarks?.length && filter) {
-      for (const lm of res.faceLandmarks) {
-        renderFilter(ctx, buildFrame(lm, canvas.width, canvas.height), filter);
+    const faceRes = landmarker.detectForVideo(video, now);
+    const hasFace = !!faceRes.faceLandmarks?.length;
+
+    // Object detection is throttled; keep + smooth the last animal box.
+    if (objectDetector && now - lastObjTime > 160) {
+      lastObjTime = now;
+      const od = objectDetector.detectForVideo(video, now);
+      const box = pickAnimalBox(od.detections);
+      if (box) {
+        animalBox = animalBox ? lerpBox(animalBox, box, 0.5) : box;
+        animalSeenAt = now;
       }
     }
+    const animalRecent = !!animalBox && now - animalSeenAt < 700;
+
+    // Decide what we're looking at, and where to draw.
+    let frame: FaceFrame | null = null;
+    let auto: Category | null = null;
+    if (hasFace) {
+      frame = buildFrame(faceRes.faceLandmarks[0], canvas.width, canvas.height);
+      auto = smoother.category;
+    } else if (animalRecent) {
+      frame = frameFromBox(animalBox!);
+      auto = "animal";
+    }
+
+    if (auto !== autoCategory) {
+      autoCategory = auto;
+      onCategoryChange();
+    }
+
+    const filter = activeFilter();
+    if (frame && filter) renderFilter(ctx, frame, filter);
   } else {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
   }
   requestAnimationFrame(renderLoop);
 }
 
-// ---- classification loop (throttled, ~1/sec) ----
+// ---- human classification loop (throttled, ~1/sec) ----
 async function classifyLoop() {
   while (running) {
     try {
       const reading = classify ? await classify(video) : null;
       if (reading) {
         smoother.push(reading);
-        // roll over at midnight if the app is left open
         const nowKey = todayKey();
-        if (nowKey !== dayKey && assignment) {
+        if (nowKey !== dayKey && allFilters.length) {
           dayKey = nowKey;
-          assignment = dailyAssignment(Object.values(assignment), dayKey);
+          assignment = dailyAssignment(allFilters, dayKey);
         }
-        refreshPanel();
-        refreshDetectedBadge();
+        onCategoryChange();
       }
     } catch (e) {
       console.warn(e);
