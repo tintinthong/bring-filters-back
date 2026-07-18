@@ -1,0 +1,144 @@
+:root {
+  --bg: #0b0b12;
+  --panel: #16161f;
+  --accent: #ff2d78;
+  --text: #f4f4f8;
+  --muted: #9a9ab0;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  overscroll-behavior: none;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: env(safe-area-inset-top) 12px calc(env(safe-area-inset-bottom) + 12px);
+  gap: 12px;
+}
+
+#stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: 20px;
+  overflow: hidden;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Mirror the selfie feed; the canvas draws the same way. */
+#video,
+#canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+#video {
+  visibility: hidden; /* canvas is what we show + record */
+}
+
+#hint {
+  position: relative;
+  z-index: 2;
+  color: var(--muted);
+  font-size: 15px;
+  text-align: center;
+  padding: 0 24px;
+}
+
+#rec-dot {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 0 rgba(255, 45, 120, 0.7);
+  animation: pulse 1.2s infinite;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 45, 120, 0.7); }
+  70% { box-shadow: 0 0 0 12px rgba(255, 45, 120, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 45, 120, 0); }
+}
+
+#filters {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+#filters::-webkit-scrollbar { display: none; }
+
+.chip {
+  flex: 0 0 auto;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1px solid #2a2a3a;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.chip[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+#controls {
+  display: flex;
+  gap: 10px;
+}
+
+.btn {
+  flex: 1;
+  padding: 15px;
+  border-radius: 14px;
+  border: 1px solid #2a2a3a;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn:disabled { opacity: 0.5; }
+.btn.primary { background: var(--accent); border-color: var(--accent); }
+.btn.recording { background: #23232f; border-color: var(--accent); color: var(--accent); }
+
+#status {
+  margin: 0;
+  min-height: 18px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}

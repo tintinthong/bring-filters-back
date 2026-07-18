@@ -1,0 +1,21 @@
+{
+  "name": "bring-3rd-party-filters-back",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile-web face AR filter you record and share to Instagram. MediaPipe FaceLandmarker + canvas overlay.",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "deploy": "npm run build && wrangler pages deploy dist --project-name=filters-back"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.20"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "wrangler": "^4.112.0"
+  }
+}
