@@ -1,4 +1,4 @@
-# Bring 3rd-party filters back 🐶🕶️
+# Bring filters back 🐶🕶️
 
 A mobile-web **face AR filter** you record in the browser and share to Instagram.
 Since Meta shut down Spark AR, this is the open path: on-device face tracking in
