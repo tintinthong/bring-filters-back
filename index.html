@@ -7,28 +7,25 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <meta name="theme-color" content="#0b0b12" />
-    <title>Filters Back — AR camera</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐶</text></svg>" />
+    <title>Pickleball Rule Roulette 🏓</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏓</text></svg>" />
   </head>
   <body>
     <div id="app">
       <div id="stage">
         <video id="video" playsinline muted autoplay></video>
         <canvas id="canvas"></canvas>
-        <div id="hint">Tap <b>Start</b> and allow camera access</div>
+        <div id="hint">Tap <b>Start</b>, then point the camera at your crew 🏓</div>
         <div id="rec-dot" hidden></div>
-        <div id="detected"></div>
       </div>
-
-      <div id="today"></div>
-      <div id="categories"></div>
 
       <div id="controls">
         <button id="start" class="btn primary">Start camera</button>
+        <button id="spin" class="btn" hidden>🎲 Spin</button>
         <button id="record" class="btn" hidden>● Record</button>
         <a id="share" class="btn" hidden>Share ↗</a>
       </div>
-      <p id="status"></p>
+      <p id="status">Assigns everyone a random (dumb) pickleball rule.</p>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

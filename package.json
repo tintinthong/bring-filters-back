@@ -11,8 +11,7 @@
     "deploy": "npm run build && wrangler pages deploy dist --project-name=bring-filters-back"
   },
   "dependencies": {
-    "@mediapipe/tasks-vision": "^0.10.20",
-    "@vladmandic/face-api": "^1.7.15"
+    "@mediapipe/tasks-vision": "^0.10.20"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

@@ -1,36 +1,17 @@
 import "./style.css";
-import { FilesetResolver, FaceLandmarker, ObjectDetector, type Detection } from "@mediapipe/tasks-vision";
-import { buildFrame, frameFromBox, renderFilter, type FaceFrame, type FilterDef, type Box } from "./filters";
-import {
-  getFilters,
-  dailyAssignment,
-  todayKey,
-  CATEGORIES,
-  CATEGORY_META,
-  type Category,
-} from "./filtersDb";
-import { CategorySmoother } from "./smoother";
-import type { classifyOnce as ClassifyOnce } from "./classify";
+import { FilesetResolver, ObjectDetector, type Detection } from "@mediapipe/tasks-vision";
+import { RULES } from "./rules";
 
 const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.20/wasm";
-const FACE_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const OBJECT_MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.task";
 
-// COCO classes we treat as "animal".
-const ANIMAL_SET = new Set([
-  "bird",
-  "cat",
-  "dog",
-  "horse",
-  "sheep",
-  "cow",
-  "elephant",
-  "bear",
-  "zebra",
-  "giraffe",
-]);
+interface Box {
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+}
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 
@@ -39,179 +20,40 @@ const canvas = $<HTMLCanvasElement>("#canvas");
 const ctx = canvas.getContext("2d")!;
 const hint = $<HTMLDivElement>("#hint");
 const recDot = $<HTMLDivElement>("#rec-dot");
-const detectedBadge = $<HTMLDivElement>("#detected");
-const todayEl = $<HTMLDivElement>("#today");
-const categoriesEl = $<HTMLDivElement>("#categories");
 const startBtn = $<HTMLButtonElement>("#start");
+const spinBtn = $<HTMLButtonElement>("#spin");
 const recordBtn = $<HTMLButtonElement>("#record");
 const shareBtn = $<HTMLAnchorElement>("#share");
 const status = $<HTMLParagraphElement>("#status");
 
 // ---- state ----
-let landmarker: FaceLandmarker | null = null;
 let objectDetector: ObjectDetector | null = null;
 let stream: MediaStream | null = null;
 let running = false;
-let lastVideoTime = -1;
 let lastObjTime = 0;
 
-let allFilters: FilterDef[] = [];
-let dayKey = todayKey();
-let assignment: Record<Category, FilterDef> | null = null;
+interface Person {
+  id: number;
+  box: Box;
+  rule: number; // locked rule index
+}
+let people: Person[] = [];
+let nextId = 1;
 
-const smoother = new CategorySmoother();
-let autoCategory: Category | null = null; // what we currently detect (human or animal)
-let manualCategory: Category | null = null; // tap to override detection
-let classify: typeof ClassifyOnce | null = null; // set after lazy-loading the classifier
-
-// animal detection (throttled, so we keep + smooth the last box)
-let animalBox: Box | null = null;
-let animalSeenAt = 0;
+let spinning = false;
+let spinStart = 0;
+let spinNonce = 0;
+const SPIN_MS = 2600;
+const SPINS = 5;
 
 function setStatus(msg: string) {
   status.textContent = msg;
 }
 
-function activeCategory(): Category | null {
-  return manualCategory ?? autoCategory;
-}
-
-function activeFilter(): FilterDef | null {
-  const cat = activeCategory();
-  return cat && assignment ? assignment[cat] : null;
-}
-
-function onCategoryChange() {
-  refreshPanel();
-  refreshDetectedBadge();
-}
-
-// ---- category panel ----
-function buildCategoryPanel() {
-  categoriesEl.innerHTML = "";
-  for (const cat of CATEGORIES) {
-    const meta = CATEGORY_META[cat];
-    const btn = document.createElement("button");
-    btn.className = "cat";
-    btn.dataset.cat = cat;
-    btn.innerHTML = `<span class="who">${meta.emoji}</span><span class="flt">…</span>`;
-    btn.onclick = () => {
-      manualCategory = manualCategory === cat ? null : cat;
-      onCategoryChange();
-    };
-    categoriesEl.appendChild(btn);
-  }
-}
-
-function refreshPanel() {
-  if (!assignment) return;
-  const active = activeCategory();
-  for (const btn of Array.from(categoriesEl.children) as HTMLButtonElement[]) {
-    const cat = btn.dataset.cat as Category;
-    btn.querySelector(".flt")!.textContent = assignment[cat]?.name ?? "…";
-    btn.setAttribute("aria-current", String(cat === active));
-  }
-}
-
-function refreshDetectedBadge() {
-  if (manualCategory) {
-    const m = CATEGORY_META[manualCategory];
-    detectedBadge.textContent = `${m.emoji} ${m.label} · manual`;
-  } else if (autoCategory === "animal") {
-    detectedBadge.textContent = "🐾 Animal";
-  } else if (autoCategory) {
-    const m = CATEGORY_META[autoCategory];
-    detectedBadge.textContent = `${m.emoji} ${m.label} · ~${smoother.age}y`;
-  } else {
-    detectedBadge.textContent = "detecting…";
-  }
-}
-
-// ---- boot ----
-async function start() {
-  startBtn.disabled = true;
-  setStatus("Loading filters + models…");
-
-  try {
-    allFilters = getFilters();
-    assignment = dailyAssignment(allFilters, dayKey);
-    todayEl.textContent = `Today · ${dayKey} · ${allFilters.length} filters`;
-    refreshPanel();
-
-    const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
-
-    landmarker = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate: "GPU" },
-      runningMode: "VIDEO",
-      numFaces: 1,
-    });
-
-    setStatus("Requesting camera…");
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: true,
-    });
-    video.srcObject = stream;
-    await video.play();
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    hint.hidden = true;
-    startBtn.hidden = true;
-    recordBtn.hidden = false;
-    running = true;
-    setStatus("Look at the camera — a pet works too 🐾");
-    requestAnimationFrame(renderLoop);
-
-    // Human age/gender classifier — heavy, so lazy-load in the background.
-    import("./classify")
-      .then(async (mod) => {
-        await mod.initClassifier();
-        classify = mod.classifyOnce;
-        classifyLoop();
-      })
-      .catch((e) => {
-        console.warn("classifier unavailable:", e);
-        if (!manualCategory && !autoCategory) {
-          manualCategory = "man";
-          onCategoryChange();
-        }
-      });
-
-    // Animal detector — also loads in the background.
-    ObjectDetector.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: OBJECT_MODEL_URL, delegate: "GPU" },
-      runningMode: "VIDEO",
-      scoreThreshold: 0.4,
-      maxResults: 5,
-    })
-      .then((od) => {
-        objectDetector = od;
-      })
-      .catch((e) => console.warn("object detector unavailable:", e));
-
-    refreshDetectedBadge();
-  } catch (err) {
-    console.error(err);
-    startBtn.disabled = false;
-    setStatus("Camera/model failed: " + (err as Error).message);
-  }
-}
-
-function pickAnimalBox(detections: readonly Detection[]): Box | null {
-  let best: Box | null = null;
-  let bestScore = 0;
-  for (const d of detections) {
-    const c = d.categories?.[0];
-    if (!c || !d.boundingBox) continue;
-    if (ANIMAL_SET.has(c.categoryName) && c.score >= 0.4 && c.score > bestScore) {
-      bestScore = c.score;
-      best = d.boundingBox;
-    }
-  }
-  return best;
-}
+// ---- helpers ----
+const randInt = (n: number) => Math.floor(Math.random() * n);
+const centerOf = (b: Box) => ({ x: b.originX + b.width / 2, y: b.originY + b.height / 2 });
+const easeOutCubic = (p: number) => 1 - Math.pow(1 - p, 3);
 
 function lerpBox(a: Box, b: Box, t: number): Box {
   return {
@@ -222,72 +64,206 @@ function lerpBox(a: Box, b: Box, t: number): Box {
   };
 }
 
-function renderLoop() {
-  if (!running || !landmarker) return;
-  const now = performance.now();
-
-  if (video.currentTime !== lastVideoTime && video.readyState >= 2) {
-    lastVideoTime = video.currentTime;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    const faceRes = landmarker.detectForVideo(video, now);
-    const hasFace = !!faceRes.faceLandmarks?.length;
-
-    // Object detection is throttled; keep + smooth the last animal box.
-    if (objectDetector && now - lastObjTime > 160) {
-      lastObjTime = now;
-      const od = objectDetector.detectForVideo(video, now);
-      const box = pickAnimalBox(od.detections);
-      if (box) {
-        animalBox = animalBox ? lerpBox(animalBox, box, 0.5) : box;
-        animalSeenAt = now;
-      }
-    }
-    const animalRecent = !!animalBox && now - animalSeenAt < 700;
-
-    // Decide what we're looking at, and where to draw.
-    let frame: FaceFrame | null = null;
-    let auto: Category | null = null;
-    if (hasFace) {
-      frame = buildFrame(faceRes.faceLandmarks[0], canvas.width, canvas.height);
-      auto = smoother.category;
-    } else if (animalRecent) {
-      frame = frameFromBox(animalBox!);
-      auto = "animal";
-    }
-
-    if (auto !== autoCategory) {
-      autoCategory = auto;
-      onCategoryChange();
-    }
-
-    const filter = activeFilter();
-    if (frame && filter) renderFilter(ctx, frame, filter);
-  } else {
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  }
-  requestAnimationFrame(renderLoop);
+/** Per-person pseudo-random offset that changes every spin (via spinNonce). */
+function offsetUnits(id: number): number {
+  const x = Math.sin(id * 127.1 + spinNonce * 311.7) * 43758.5453;
+  return (x - Math.floor(x)) * RULES.length;
 }
 
-// ---- human classification loop (throttled, ~1/sec) ----
-async function classifyLoop() {
-  while (running) {
-    try {
-      const reading = classify ? await classify(video) : null;
-      if (reading) {
-        smoother.push(reading);
-        const nowKey = todayKey();
-        if (nowKey !== dayKey && allFilters.length) {
-          dayKey = nowKey;
-          assignment = dailyAssignment(allFilters, dayKey);
-        }
-        onCategoryChange();
-      }
-    } catch (e) {
-      console.warn(e);
-    }
-    await new Promise((r) => setTimeout(r, 1100));
+function displayedRule(p: Person, now: number): number {
+  if (!spinning) return p.rule;
+  const prog = Math.min((now - spinStart) / SPIN_MS, 1);
+  const pos = easeOutCubic(prog) * SPINS * RULES.length;
+  return Math.floor(pos + offsetUnits(p.id)) % RULES.length;
+}
+
+function startSpin() {
+  if (!running) return;
+  spinNonce = Math.random() * 1000;
+  spinStart = performance.now();
+  spinning = true;
+  spinBtn.textContent = "🎲 Spinning…";
+  setStatus("Spinning the rules…");
+}
+
+function maybeLock(now: number) {
+  if (spinning && now - spinStart >= SPIN_MS) {
+    spinning = false;
+    for (const p of people) p.rule = Math.floor(offsetUnits(p.id)) % RULES.length;
+    spinBtn.textContent = "🎲 Spin again";
+    setStatus("Rules locked in! Record & share 🏓");
   }
+}
+
+// ---- person tracking (greedy nearest-box match keeps a rule stuck to a person) ----
+function personBoxes(dets: readonly Detection[]): Box[] {
+  const out: Box[] = [];
+  for (const d of dets) {
+    const c = d.categories?.[0];
+    if (c && d.boundingBox && c.categoryName === "person" && c.score >= 0.4) {
+      out.push(d.boundingBox);
+    }
+  }
+  return out;
+}
+
+function updatePeople(boxes: Box[]) {
+  const used = new Set<number>();
+  const next: Person[] = [];
+  for (const b of boxes) {
+    const bc = centerOf(b);
+    let best = -1;
+    let bestD = Infinity;
+    people.forEach((p, i) => {
+      if (used.has(i)) return;
+      const d = Math.hypot(bc.x - centerOf(p.box).x, bc.y - centerOf(p.box).y);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    });
+    if (best >= 0 && bestD < b.width * 0.9) {
+      used.add(best);
+      const p = people[best];
+      next.push({ id: p.id, rule: p.rule, box: lerpBox(p.box, b, 0.5) });
+    } else {
+      next.push({ id: nextId++, rule: randInt(RULES.length), box: b });
+    }
+  }
+  people = next;
+}
+
+// ---- label drawing ----
+function roundRect(x: number, y: number, w: number, h: number, r: number) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function wrap(text: string, maxW: number): string[] {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const t = cur ? cur + " " + w : w;
+    if (ctx.measureText(t).width <= maxW || !cur) cur = t;
+    else {
+      lines.push(cur);
+      cur = w;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+
+function drawLabel(box: Box, text: string, live: boolean) {
+  const fs = Math.max(15, Math.min(28, Math.round(canvas.width * 0.023)));
+  ctx.font = `700 ${fs}px system-ui, -apple-system, sans-serif`;
+  const maxW = Math.min(canvas.width * 0.46, Math.max(box.width * 1.5, canvas.width * 0.3));
+  const lines = wrap(text, maxW);
+  const lineH = fs * 1.18;
+  const padX = fs * 0.7;
+  const padY = fs * 0.5;
+  const textW = Math.max(...lines.map((l) => ctx.measureText(l).width));
+  const w = textW + padX * 2;
+  const h = lines.length * lineH + padY * 2;
+
+  const cx = Math.max(w / 2 + 4, Math.min(canvas.width - w / 2 - 4, box.originX + box.width / 2));
+  const gap = fs * 0.6;
+  let top = box.originY - gap - h;
+  const above = top >= 4;
+  if (!above) top = box.originY + gap;
+
+  // pointer to the head (only when the label sits above)
+  if (above) {
+    ctx.fillStyle = live ? "#ffd23f" : "#ff2d78";
+    ctx.beginPath();
+    ctx.moveTo(cx - fs * 0.4, top + h - 1);
+    ctx.lineTo(cx + fs * 0.4, top + h - 1);
+    ctx.lineTo(cx, top + h + fs * 0.7);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  roundRect(cx - w / 2, top, w, h, fs * 0.5);
+  ctx.fillStyle = "rgba(12,12,18,0.86)";
+  ctx.fill();
+  ctx.lineWidth = Math.max(2, fs * 0.12);
+  ctx.strokeStyle = live ? "#ffd23f" : "#ff2d78";
+  ctx.stroke();
+
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  lines.forEach((l, i) => ctx.fillText(l, cx, top + padY + i * lineH));
+}
+
+// ---- boot ----
+async function start() {
+  startBtn.disabled = true;
+  setStatus("Loading detector…");
+  try {
+    const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+    objectDetector = await ObjectDetector.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: OBJECT_MODEL_URL, delegate: "GPU" },
+      runningMode: "VIDEO",
+      scoreThreshold: 0.4,
+      maxResults: 10,
+      categoryAllowlist: ["person"],
+    });
+
+    setStatus("Requesting camera…");
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: true,
+    });
+    video.srcObject = stream;
+    await video.play();
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    hint.hidden = true;
+    startBtn.hidden = true;
+    spinBtn.hidden = false;
+    recordBtn.hidden = false;
+    running = true;
+    requestAnimationFrame(renderLoop);
+    startSpin();
+  } catch (err) {
+    console.error(err);
+    startBtn.disabled = false;
+    setStatus("Camera/detector failed: " + (err as Error).message);
+  }
+}
+
+function renderLoop() {
+  if (!running) return;
+  const now = performance.now();
+  if (video.readyState >= 2) {
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    if (objectDetector && now - lastObjTime > 150) {
+      lastObjTime = now;
+      const res = objectDetector.detectForVideo(video, now);
+      updatePeople(personBoxes(res.detections));
+    }
+    maybeLock(now);
+
+    if (people.length === 0 && !spinning) {
+      // gentle nudge when nobody's found yet
+      ctx.font = `700 ${Math.round(canvas.width * 0.03)}px system-ui, sans-serif`;
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("Point at some people 🏓", canvas.width / 2, canvas.height / 2);
+    }
+    for (const p of people) drawLabel(p.box, RULES[displayedRule(p, now)], spinning);
+  }
+  requestAnimationFrame(renderLoop);
 }
 
 // ---- recording ----
@@ -295,12 +271,7 @@ let recorder: MediaRecorder | null = null;
 let chunks: Blob[] = [];
 
 function pickMime(): string {
-  const prefs = [
-    "video/mp4;codecs=h264,aac",
-    "video/mp4",
-    "video/webm;codecs=vp9,opus",
-    "video/webm",
-  ];
+  const prefs = ["video/mp4;codecs=h264,aac", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"];
   return prefs.find((m) => MediaRecorder.isTypeSupported(m)) ?? "";
 }
 
@@ -308,14 +279,12 @@ function startRecording() {
   if (!stream) return;
   const canvasStream = canvas.captureStream(30);
   for (const track of stream.getAudioTracks()) canvasStream.addTrack(track);
-
   const mimeType = pickMime();
   recorder = new MediaRecorder(canvasStream, mimeType ? { mimeType } : undefined);
   chunks = [];
   recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
   recorder.onstop = () => finishRecording(mimeType);
   recorder.start();
-
   recDot.hidden = false;
   recordBtn.textContent = "■ Stop";
   recordBtn.classList.add("recording");
@@ -334,9 +303,8 @@ function finishRecording(mimeType: string) {
   const type = mimeType || "video/webm";
   const ext = type.includes("mp4") ? "mp4" : "webm";
   const blob = new Blob(chunks, { type });
-  const file = new File([blob], `filter-${Date.now()}.${ext}`, { type });
+  const file = new File([blob], `pickleball-rules-${Date.now()}.${ext}`, { type });
   const url = URL.createObjectURL(blob);
-
   const canShareFile =
     typeof navigator.canShare === "function" && navigator.canShare({ files: [file] });
 
@@ -346,18 +314,18 @@ function finishRecording(mimeType: string) {
     shareBtn.onclick = async (e) => {
       e.preventDefault();
       try {
-        await navigator.share({ files: [file], title: "My filter" });
+        await navigator.share({ files: [file], title: "Pickleball rules" });
       } catch {
-        /* user cancelled */
+        /* cancelled */
       }
     };
-    setStatus("Tap Share → Instagram (or save to Reels/Stories).");
+    setStatus("Tap Share → Instagram.");
   } else {
     shareBtn.textContent = "Download ↓";
     shareBtn.href = url;
     shareBtn.download = file.name;
     shareBtn.onclick = null;
-    setStatus("Saved. Open Instagram and upload the clip.");
+    setStatus("Saved. Upload to Instagram from your phone.");
   }
 }
 
@@ -365,6 +333,5 @@ recordBtn.onclick = () => {
   if (recorder && recorder.state === "recording") stopRecording();
   else startRecording();
 };
-
-buildCategoryPanel();
+spinBtn.onclick = startSpin;
 startBtn.onclick = start;
