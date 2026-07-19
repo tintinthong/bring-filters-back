@@ -2,7 +2,7 @@ import "./style.css";
 import { FilesetResolver, FaceLandmarker, ObjectDetector, type Detection } from "@mediapipe/tasks-vision";
 import { buildFrame, frameFromBox, renderFilter, type FaceFrame, type FilterDef, type Box } from "./filters";
 import {
-  loadFilters,
+  getFilters,
   dailyAssignment,
   todayKey,
   CATEGORIES,
@@ -133,15 +133,12 @@ async function start() {
   setStatus("Loading filters + models…");
 
   try {
-    const [{ filters, source }, fileset] = await Promise.all([
-      loadFilters(),
-      FilesetResolver.forVisionTasks(WASM_BASE),
-    ]);
-
-    allFilters = filters;
+    allFilters = getFilters();
     assignment = dailyAssignment(allFilters, dayKey);
-    todayEl.textContent = `Today · ${dayKey} · ${filters.length} filters (${source})`;
+    todayEl.textContent = `Today · ${dayKey} · ${allFilters.length} filters`;
     refreshPanel();
+
+    const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
 
     landmarker = await FaceLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: FACE_MODEL_URL, delegate: "GPU" },

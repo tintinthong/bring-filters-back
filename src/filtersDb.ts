@@ -1,52 +1,10 @@
 /**
- * The filter "database".
- *
- * Filters are fetched at runtime from an online JSON file so the set can be
- * edited without redeploying the app. Resolution order:
- *   1. ?filters=<url>            (override, for testing)
- *   2. REMOTE_URL                (raw GitHub — edit filters.json on `main`)
- *   3. /filters.json             (same-origin copy shipped with the deploy)
- *   4. FALLBACK                  (bundled, so the app always works offline)
+ * Categories + the deterministic "filter of the day" logic.
+ * The filter set itself is bundled in filters.data.ts (single source of truth).
  */
 
 import type { FilterDef } from "./filters";
-
-const REMOTE_URL =
-  "https://raw.githubusercontent.com/tintinthong/bring-filters-back/main/public/filters.json";
-
-const FALLBACK: FilterDef[] = [
-  {
-    id: "puppy",
-    name: "Puppy",
-    emoji: "🐶",
-    parts: [{ type: "puppyEars" }, { type: "puppyNose" }, { type: "tongue" }],
-  },
-  {
-    id: "crown",
-    name: "Crown",
-    emoji: "👑",
-    parts: [{ type: "emoji", char: "👑", anchor: "forehead", up: 1.35, scale: 2.2 }],
-  },
-  {
-    id: "cool",
-    name: "Cool",
-    emoji: "🕶️",
-    parts: [
-      { type: "glasses" },
-      { type: "emoji", char: "✨", anchor: "leftEye", along: -1.7, up: 0.7, scale: 0.8 },
-      { type: "emoji", char: "✨", anchor: "rightEye", along: 1.7, up: 0.7, scale: 0.8 },
-    ],
-  },
-  {
-    id: "love",
-    name: "Love",
-    emoji: "❤️",
-    parts: [
-      { type: "emoji", char: "❤️", anchor: "leftEye", scale: 0.8 },
-      { type: "emoji", char: "❤️", anchor: "rightEye", scale: 0.8 },
-    ],
-  },
-];
+import { FILTERS } from "./filters.data";
 
 export type Category = "boy" | "girl" | "woman" | "man" | "animal";
 export const CATEGORIES: Category[] = ["boy", "girl", "woman", "man", "animal"];
@@ -59,31 +17,9 @@ export const CATEGORY_META: Record<Category, { emoji: string; label: string }> =
   animal: { emoji: "🐾", label: "Animal" },
 };
 
-async function tryFetch(url: string): Promise<FilterDef[] | null> {
-  try {
-    const res = await fetch(url, { cache: "no-cache" });
-    if (!res.ok) return null;
-    const json = await res.json();
-    const list = Array.isArray(json) ? json : json.filters;
-    if (Array.isArray(list) && list.length) return list as FilterDef[];
-  } catch {
-    /* network / parse error — fall through */
-  }
-  return null;
-}
-
-/** Load the filter set from the online DB, with graceful fallback. */
-export async function loadFilters(): Promise<{ filters: FilterDef[]; source: string }> {
-  const override = new URLSearchParams(location.search).get("filters");
-  const candidates: Array<[string, string]> = [];
-  if (override) candidates.push([override, "override"]);
-  candidates.push([REMOTE_URL, "remote"], ["/filters.json", "local"]);
-
-  for (const [url, source] of candidates) {
-    const filters = await tryFetch(url);
-    if (filters) return { filters, source };
-  }
-  return { filters: FALLBACK, source: "bundled" };
+/** The bundled filter set. */
+export function getFilters(): FilterDef[] {
+  return FILTERS;
 }
 
 // ---- deterministic "filter of the day" ----
