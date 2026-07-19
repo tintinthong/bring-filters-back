@@ -83,7 +83,7 @@ export function buildFrame(
   return { p, ux, uy, s, mouthOpen };
 }
 
-// ---- data model (matches filters.json) ----
+// ---- data model (see filters.data.ts) ----
 
 export type Anchor =
   | "forehead"
