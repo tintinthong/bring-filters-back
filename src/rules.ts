@@ -5,7 +5,7 @@ export const RULES: string[] = [
   "You're allowed one extra bounce",
   "The double-bounce rule does not apply",
   "You may only hit into the right court",
-  "Switch your paddle to the other hand after every point",
-  "Announce the score in a whisper before each serve",
-  "You may only move sideways, never forwards",
+  "You may only stay behind the baseline",
+  "You are not allowed to go anywhere out of bounds",
+  "You may only use your non-dominant hand to hit the ball",
 ];

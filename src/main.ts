@@ -43,6 +43,7 @@ let nextId = 1;
 let spinning = false;
 let spinStart = 0;
 let spinNonce = 0;
+let autoSpun = false; // fire the first spin automatically once someone is detected
 const SPIN_MS = 2600;
 const SPINS = 5;
 
@@ -231,8 +232,8 @@ async function start() {
     spinBtn.hidden = false;
     recordBtn.hidden = false;
     running = true;
+    setStatus("Looking for people…");
     requestAnimationFrame(renderLoop);
-    startSpin();
   } catch (err) {
     console.error(err);
     startBtn.disabled = false;
@@ -250,6 +251,11 @@ function renderLoop() {
       lastObjTime = now;
       const res = objectDetector.detectForVideo(video, now);
       updatePeople(personBoxes(res.detections));
+      // auto-spin the first time we actually see someone
+      if (!autoSpun && people.length > 0) {
+        autoSpun = true;
+        startSpin();
+      }
     }
     maybeLock(now);
 
