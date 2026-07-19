@@ -44,8 +44,8 @@ let spinning = false;
 let spinStart = 0;
 let spinNonce = 0;
 let autoSpun = false; // fire the first spin automatically once someone is detected
-const SPIN_MS = 2600;
-const SPINS = 5;
+const SPIN_MS = 3000;
+const SPINS = 8;
 
 function setStatus(msg: string) {
   status.textContent = msg;
@@ -243,15 +243,31 @@ async function start() {
 
 function renderLoop() {
   if (!running) return;
-  const now = performance.now();
-  if (video.readyState >= 2) {
+  // Schedule the next frame FIRST — a thrown error below can never stall the loop.
+  requestAnimationFrame(renderLoop);
+
+  try {
+    const now = performance.now();
+    if (video.readyState < 2) return;
+
+    // videoWidth can still be 0 right after play(); grab it lazily to avoid a
+    // 0×0 drawImage (which throws).
+    if (!canvas.width && video.videoWidth) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    if (!canvas.width) return;
+
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     if (objectDetector && now - lastObjTime > 150) {
       lastObjTime = now;
-      const res = objectDetector.detectForVideo(video, now);
-      updatePeople(personBoxes(res.detections));
-      // auto-spin the first time we actually see someone
+      try {
+        const res = objectDetector.detectForVideo(video, now);
+        updatePeople(personBoxes(res.detections));
+      } catch (e) {
+        console.warn("detect error", e);
+      }
       if (!autoSpun && people.length > 0) {
         autoSpun = true;
         startSpin();
@@ -260,7 +276,6 @@ function renderLoop() {
     maybeLock(now);
 
     if (people.length === 0 && !spinning) {
-      // gentle nudge when nobody's found yet
       ctx.font = `700 ${Math.round(canvas.width * 0.03)}px system-ui, sans-serif`;
       ctx.fillStyle = "rgba(255,255,255,0.85)";
       ctx.textAlign = "center";
@@ -268,8 +283,9 @@ function renderLoop() {
       ctx.fillText("Point at some people 🏓", canvas.width / 2, canvas.height / 2);
     }
     for (const p of people) drawLabel(p.box, RULES[displayedRule(p, now)], spinning);
+  } catch (e) {
+    console.error("render error", e);
   }
-  requestAnimationFrame(renderLoop);
 }
 
 // ---- recording ----
